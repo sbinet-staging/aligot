@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/gonuts/logger"
@@ -276,7 +277,7 @@ func main() {
 		pkgs = append(pkgs, spec.Requires...)
 	}
 
-	b.order = toposort(b.specs)
+	b.order = topoSort(b.specs)
 	msg.Debugf("build order: %v\n", b.order)
 
 	// resolve the tag to the actual commit ref
@@ -442,65 +443,30 @@ func filterByArch(arch string, reqs []string) []string {
 	return o
 }
 
-// topsort does a  topogical sort to have the correct build order even in the case of
-// non-tree like dependencies...
-// The actual algorithm used can be found at:
-//   http://www.stoimen.com/blog/2012/10/01/computer-algorithms-topological-sort-of-a-graph/
-func toposort(specs map[string]Spec) []string {
+// topoSort does a topological sort to have the correct build order.
+//
+// adapted from gopl.io/ch5/toposort
+func topoSort(m map[string]Spec) []string {
+	var order []string
+	seen := make(map[string]bool)
+	var visitAll func(items []string)
 
-	edges := [][2]string{}
-	L := make([]Spec, 0, len(specs))
-	S := make([]Spec, 0, len(specs))
-	for _, spec := range specs {
-		if len(spec.Requires) == 0 {
-			L = append(L, spec)
-		}
-		for _, d := range spec.Requires {
-			edges = append(edges, [2]string{spec.Package, d})
+	visitAll = func(items []string) {
+		for _, item := range items {
+			if !seen[item] {
+				seen[item] = true
+				visitAll(m[item].Requires)
+				order = append(order, item)
+			}
 		}
 	}
 
-	for len(L) > 0 {
-		spec := L[0]
-		L = L[1:]
-		S = append(S, spec)
-		next := make([]string, 0, len(edges))
-		for _, edge := range edges {
-			if edge[1] == spec.Package {
-				next = append(next, edge[0])
-			}
-		}
-		oldEdges := edges
-		edges = make([][2]string, 0, len(oldEdges))
-		for _, e := range edges {
-			if e[1] != spec.Package {
-				edges = append(edges, e)
-			}
-		}
-		hasPred := make(map[string]struct{}, len(edges))
-		withPred := make(map[string]struct{}, len(edges))
-		for _, e := range edges {
-			for _, m := range next {
-				if e[0] == m {
-					hasPred[m] = struct{}{}
-				}
-			}
-		}
-		for _, v := range next {
-			if _, ok := hasPred[v]; !ok {
-				withPred[v] = struct{}{}
-			}
-		}
-
-		for m := range withPred {
-			L = append(L, specs[m])
-		}
+	var keys []string
+	for key := range m {
+		keys = append(keys, key)
 	}
 
-	order := make([]string, 0, len(S))
-	for _, spec := range S {
-		order = append(order, spec.Package)
-	}
-
+	sort.Strings(keys)
+	visitAll(keys)
 	return order
 }
