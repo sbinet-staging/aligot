@@ -60,6 +60,7 @@ type Spec struct {
 	Recipe            string            `yaml:"recipe"`
 	IncrementalRecipe string            `yaml:"incremental_recipe"`
 	Hash              string            `yaml:"hash"`
+	Revision          string            `yaml:"revision"`
 
 	tar struct {
 		storePath string
@@ -72,7 +73,7 @@ type Spec struct {
 type Builder struct {
 	cfg   Config
 	pkgs  []string
-	specs map[string]Spec
+	specs map[string]*Spec
 	order []string
 	sdir  string
 }
@@ -197,7 +198,7 @@ func main() {
 	b := Builder{
 		cfg:   cfg,
 		pkgs:  []string{cfg.pkgs[0]},
-		specs: make(map[string]Spec),
+		specs: make(map[string]*Spec),
 		sdir:  filepath.Join(cfg.wdir, "SPECS"),
 	}
 	err = os.MkdirAll(b.sdir, 0755)
@@ -273,7 +274,7 @@ func main() {
 
 		msg.Debugf("spec[%s]: %v\n", pkg, spec.Requires)
 		spec.Recipe = string(recipe)
-		b.specs[spec.Package] = spec
+		b.specs[spec.Package] = &spec
 		pkgs = append(pkgs, spec.Requires...)
 	}
 
@@ -290,7 +291,6 @@ func main() {
 			spec.CommitHash = spec.Tag
 		}
 
-		b.specs[pkg] = spec
 	}
 
 	// decide what is the main package we are building and at what commit.
@@ -362,7 +362,6 @@ func main() {
 		//...
 
 		spec.Hash = hex.EncodeToString(hash.Sum(nil))
-		b.specs[p] = spec
 		msg.Debugf("hash for recipe %s is %s\n", p, spec.Hash)
 	}
 
@@ -377,7 +376,6 @@ func main() {
 		spec.tar.hashDir = join(cfg.wdir, "TARS", cfg.arch, "store", prefix, cfg.arch)
 		spec.tar.linkDir = join(cfg.wdir, "TARS", cfg.arch, spec.Package)
 
-		b.specs[p] = spec
 	}
 
 	// we recursively calculate the full set of requires FullRequires,
@@ -389,7 +387,7 @@ func main() {
 
 	// we now iterate on all the packages, making sure we build correctly every
 	// single one of them.
-	// this is onde this way so that the second time we run we can check if the
+	// this is done this way so that the second time we run we can check if the
 	// build was consistent and if it is, we bail out.
 	niter := make(map[string]int)
 	build := b.order
@@ -405,6 +403,41 @@ func main() {
 		}
 		spec := b.specs[p]
 		msg.Debugf(">>> %v...\n", spec.Package)
+
+		// since we can execute this multiple times for a given package, in
+		// order to ensure consistency, we need to reset things and make them
+		// pristine.
+		spec.Revision = ""
+
+		msg.Debugf("updating from tarballs...\n")
+
+		// if we arrived here, it really means we have a tarball which was
+		// created using the same recipe.
+		// we will still perform the build process rather than executing the
+		// build itself.
+		// we will:
+		//  - unpack it in a temporary place
+		//  - invoke the relocation specifying the correct workdir and the
+		//    correct path which should have been used
+		//  - move the version directory to its final destination, including the
+		//    correct revision
+		//  - repack it and put it in the store with the rest
+		//
+		// this will result in a new package which has the same binary contents
+		// of the old one but where the relocation will work for the new
+		// directory.
+		// here, we simply store the fact that we can reuse the contents of
+		// cached-tarball.
+		if *flagRemote != "" {
+			msg.Debugf("updating remote store for package %s@%s\n",
+				spec.Package, spec.Hash,
+			)
+			panic("not implemented")
+		}
+
+		// decide how it should be called, based on the hash and what is already
+		// available
+		msg.Debugf("checking for packages already built...\n")
 	}
 }
 
@@ -446,7 +479,7 @@ func filterByArch(arch string, reqs []string) []string {
 // topoSort does a topological sort to have the correct build order.
 //
 // adapted from gopl.io/ch5/toposort
-func topoSort(m map[string]Spec) []string {
+func topoSort(m map[string]*Spec) []string {
 	var order []string
 	seen := make(map[string]bool)
 	var visitAll func(items []string)
